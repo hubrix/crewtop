@@ -1,0 +1,74 @@
+{
+  "daily": [
+    {
+      "agent": "all",
+      "cacheCreationTokens": 1240,
+      "cacheReadTokens": 2230,
+      "inputTokens": 910,
+      "metadata": {
+        "agents": [
+          "claude",
+          "codex",
+          "pi"
+        ]
+      },
+      "modelBreakdowns": [
+        {
+          "cacheCreationTokens": 40,
+          "cacheReadTokens": 30,
+          "cost": 0.25,
+          "inputTokens": 10,
+          "modelName": "[pi] claude-sonnet-5",
+          "outputTokens": 20,
+          "storedCost": 0.25
+        },
+        {
+          "cacheCreationTokens": 400,
+          "cacheReadTokens": 600,
+          "cost": 0.0037199999999999998,
+          "inputTokens": 100,
+          "modelName": "claude-opus-5-5",
+          "outputTokens": 60
+        },
+        {
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 400,
+          "cost": 0.0028,
+          "inputTokens": 600,
+          "modelName": "gpt-5",
+          "outputTokens": 200
+        },
+        {
+          "cacheCreationTokens": 800,
+          "cacheReadTokens": 1200,
+          "cost": 0.0,
+          "inputTokens": 200,
+          "missingPricing": true,
+          "modelName": "CANARY_MODEL_3e8a",
+          "outputTokens": 120
+        }
+      ],
+      "modelsUsed": [
+        "CANARY_MODEL_3e8a",
+        "[pi] claude-sonnet-5",
+        "claude-opus-5-5",
+        "gpt-5"
+      ],
+      "outputTokens": 400,
+      "period": "2026-01-15",
+      "totalCost": 0.25652,
+      "totalTokens": 4780
+    }
+  ],
+  "totals": {
+    "cacheCreationTokens": 1240,
+    "cacheReadTokens": 2230,
+    "inputTokens": 910,
+    "outputTokens": 400,
+    "totalCost": 0.25652,
+    "totalTokens": 4780,
+    "unpricedModels": [
+      "CANARY_MODEL_3e8a"
+    ]
+  }
+}

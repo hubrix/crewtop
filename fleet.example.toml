@@ -1,0 +1,25 @@
+# crewtop's fleet: copy to ~/.config/crewtop/fleet.toml on the hub, the machine that
+# runs the dashboard ($XDG_CONFIG_HOME/crewtop/fleet.toml if that is set).
+#
+# Each [[member]] needs a name, shown on screen, and exactly one of:
+#   local = true    the machine the dashboard runs on, collected directly
+#   ssh = "target"  an SSH destination: an alias from ~/.ssh/config or [user@]host
+#
+# For a port or an identity file, add an alias to ~/.ssh/config and name it here.
+#
+# The hub runs `crewtop collect --stream` on each ssh member. crewtop must be on that
+# machine's PATH for a non-interactive SSH session, and the hub's key must log in with
+# no prompt. A member that fails either check shows as unreachable. Members are shown
+# in the order listed. Restart the dashboard after editing this file.
+
+[[member]]
+name = "hub"
+local = true
+
+[[member]]
+name = "box-a"
+ssh = "box-a"
+
+[[member]]
+name = "box-b"
+ssh = "box-b"

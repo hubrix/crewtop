@@ -1,0 +1,13 @@
+crewtop
+Copyright (c) 2026 Mark Friedgan.
+
+Licensed under the GNU Affero General Public License, version 3 or later
+(AGPL-3.0-or-later). See /usr/share/doc/crewtop/LICENSE.
+
+Bundled third-party software keeps its own license:
+
+Node.js, in /usr/lib/crewtop/node
+  See /usr/lib/crewtop/node/LICENSE.
+
+ccusage, in /usr/lib/crewtop/node_modules
+  MIT. See /usr/lib/crewtop/node_modules/ccusage/LICENSE.

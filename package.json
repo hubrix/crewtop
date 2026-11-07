@@ -1,0 +1,28 @@
+{
+  "name": "crewtop",
+  "version": "0.1.0",
+  "description": "htop for agents running and tokens burned across the crew",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "crewtop": "bin/crewtop"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "record-fixture": "node scripts/record-ccusage-fixture.ts",
+    "verify-local": "node scripts/verify-local.ts",
+    "verify-fleet": "node scripts/verify-fleet.ts"
+  },
+  "dependencies": {
+    "ccusage": "20.0.48"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  },
+  "license": "AGPL-3.0-or-later"
+}

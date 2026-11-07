@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs crewtop on the Node bundled in this package, whatever node the system has.
+set -eu
+root=$(dirname "$(readlink -f "$0")")/../lib/crewtop
+# ccusage's npm launcher is "#!/usr/bin/env node", so it finds node through PATH.
+PATH=$root/node/bin:$PATH
+export PATH
+exec "$root/node/bin/node" "$root/bin/crewtop" "$@"

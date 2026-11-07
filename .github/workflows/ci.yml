@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - name: Tests, including the privacy canary and the ccusage contract
+        run: npm test
+
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: The production install delivers a working binary
+        run: |
+          npm ci --omit=dev --ignore-scripts
+          test "$(node_modules/.bin/ccusage --version)" = "ccusage 20.0.48"
+          test "$(bin/crewtop --version)" = "crewtop 0.1.0"
+
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The package builds and runs on its bundled Node
+        run: scripts/build-deb.sh
+      - run: dpkg-deb -I dist/crewtop_*_amd64.deb
