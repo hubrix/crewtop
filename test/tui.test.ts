@@ -31,6 +31,16 @@ const visibleRows = (m: HostModel, view: View, nowMs: number) => fleetRows([m], 
 const plain = (lines: string[]) => lines.map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''));
 const rowFor = (m: HostModel, k: number, withCache = false): Row => m.rows(NOW, withCache).find((r) => r.id.endsWith(key(k)))!;
 
+test('a local model with a $0 cost shows $0, not n/a', () => {
+  const m = model([live(1, 'pi', 'working')], [usage(1, 'pi', { m: ['backup'], c: 0 })]);
+  const row = rowFor(m, 1);
+  assert.equal(row.cost, 0);
+  assert.notEqual(row.tokens, 'n/a');
+  const line = plain(screen(m)).find((l) => l.includes(' pi '))!;
+  assert.match(line, /\$0\.00/);
+  assert.doesNotMatch(line, /n\/a/);
+});
+
 test('an agent ccusage cannot read shows n/a, never 0', () => {
   const m = model([live(1, 'dsh-tui', 'working'), live(2, 'kiro', 'idle'), live(3, 'muse', 'idle'), live(4, 'omp', 'idle')], [usage(9, 'claude')]);
   for (const k of [1, 2, 3, 4]) {

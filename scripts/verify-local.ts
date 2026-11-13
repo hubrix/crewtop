@@ -1,12 +1,14 @@
 // Phase 1 exit test on the machine it runs on. Compares what `crewtop collect
-// --stream` says with `ccusage session --json` and `herdr agent list` read
-// moments later. Active sessions move between the two reads, so each comparison
-// retries on later frames. Prints counts, seats and enums only.
+// --stream` says with `ccusage session --json` and `herdr agent list` (run for
+// every running Herdr session) read moments later. Active sessions move between
+// the two reads, so each comparison retries on later frames. Prints counts, seats
+// and enums only.
 import { spawn, spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { closedAgentName, OTHER_AGENT } from '../src/agents.ts';
 import { CCUSAGE_BIN, PACKAGE_ROOT } from '../src/collect/ccusage.ts';
+import { parseHerdrList, parseHerdrSessions } from '../src/collect/herdr.ts';
 import { loadSalt, makeKeyer, sessionKey } from '../src/collect/salt.ts';
 import { decodeFrame, STATES } from '../src/wire.ts';
 import type { LiveFrame, State, UsageFrame } from '../src/wire.ts';
@@ -45,12 +47,39 @@ function compareUsage(frame: UsageFrame) {
   return { sessions: source.length, wireRows: frame.rows.length, exact, differ, missing, sourceTokens, wireTokens };
 }
 
+function herdrRead(args: string[], socket?: string): string | null {
+  const env = socket === undefined ? process.env : { ...process.env, HERDR_SOCKET_PATH: socket };
+  const result = spawnSync('herdr', args, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] });
+  return result.status === 0 ? result.stdout : null;
+}
+
+/** Every agent in every running session, each with the key the collector should give it. */
+function herdrSource(): { k: string; raw: Record<string, any> }[] {
+  const listing = herdrRead(['session', 'list', '--json']);
+  const reads = [{ text: herdrRead(['agent', 'list']), scope: undefined as string | undefined }];
+  for (const { name, socket } of listing === null ? [] : parseHerdrSessions(listing, process.env.HERDR_SOCKET_PATH)) {
+    reads.push({ text: herdrRead(['agent', 'list'], socket), scope: name });
+  }
+  const seen = new Set<string>();
+  const source: { k: string; raw: Record<string, any> }[] = [];
+  for (const { text, scope } of reads) {
+    if (text === null) continue;
+    const agents = (JSON.parse(text) as { result: { agents: Record<string, any>[] } }).result.agents;
+    const keys = parseHerdrList(text, keyer, scope)!.map((row) => row.k);
+    agents.forEach((raw, i) => {
+      if (seen.has(keys[i]!)) return;
+      seen.add(keys[i]!);
+      source.push({ k: keys[i]!, raw });
+    });
+  }
+  return source;
+}
+
 function compareLive(frame: LiveFrame) {
-  const result = spawnSync('herdr', ['agent', 'list'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  const source = (JSON.parse(result.stdout) as { result: { agents: Record<string, any>[] } }).result.agents;
+  const source = herdrSource();
   const wire = frame.agents.filter((agent) => agent.src === 'herdr');
-  const table = source.map((raw) => {
-    const row = wire.find((agent) => agent.seat === raw.pane_id);
+  const table = source.map(({ k, raw }) => {
+    const row = wire.find((agent) => agent.k === k);
     const expected = STATES.includes(raw.agent_status as State) ? raw.agent_status : 'unknown';
     return {
       seat: raw.pane_id as string,

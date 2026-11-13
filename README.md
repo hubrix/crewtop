@@ -99,9 +99,12 @@ counters, F1 help, `q` quit.
   `nice -n 10 ccusage session --json --offline --timezone UTC --config <empty file>`,
   one child at a time, with stderr discarded and a 30 s timeout. crewtop never opens
   a transcript.
-- **Running now:** `herdr agent list` is the authority for state. The process table
-  catches agents Herdr does not show, as `src: proc` rows with state `unknown`. Logs
-  never decide liveness.
+- **Running now:** `herdr agent list` is the authority for state. It runs against the
+  default server and against each other running session that `herdr session list`
+  names, all within one 5 s deadline. An agent seen in two sessions counts once, and
+  a session that is down is skipped. Session names and socket paths stay on the
+  machine. The process table catches agents Herdr does not show, as `src: proc` rows
+  with state `unknown`. Logs never decide liveness.
 - **Refresh:** repaint 1 s, liveness 2 s, usage 15-120 s (adapts to ccusage's CPU
   cost), today's total 60 s.
 
