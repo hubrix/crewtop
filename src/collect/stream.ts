@@ -4,7 +4,7 @@ import { release } from 'node:os';
 import { encodeFrame, PROTOCOL_VERSION } from '../wire.ts';
 import type { ErrorCode, Frame, HelloFrame } from '../wire.ts';
 import { CcusageRunner, ccusageVersion, collectorVersion, parseDailyReport, parseSessionReport, usageDelaySeconds } from './ccusage.ts';
-import { parseHerdrList, runHerdrList } from './herdr.ts';
+import { readHerdr } from './herdr.ts';
 import { mergeLive, scanProcesses } from './proc.ts';
 import { loadSalt, makeKeyer } from './salt.ts';
 import type { Keyer } from './salt.ts';
@@ -80,8 +80,7 @@ export function startCollector(options: CollectorOptions): Collector {
 
   const liveLoop = async () => {
     const startedAt = Date.now();
-    const raw = await runHerdrList(herdrBin);
-    const herdr = raw === null ? null : parseHerdrList(raw, keyer);
+    const herdr = await readHerdr(keyer, herdrBin);
     if (herdr === null) fail('herdr_unavailable');
     const scan = scanProcesses(procRoot);
     if (scan === null) fail('proc_unavailable');

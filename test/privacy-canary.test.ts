@@ -27,6 +27,12 @@ const HERDR_CANARIES = {
   sessionValue: 'CANARY_SESSION_VALUE_88bb',
   workspace: 'CANARY_WORKSPACE_99cc',
 };
+// A named Herdr session, like the one firstmate's remote homes run in.
+const HERDR_SESSION_CANARIES = {
+  name: 'CANARY_HERDR_SESSION_NAME_d5d5',
+  socket: 'CANARY_HERDR_SOCKET_e6e6',
+  dir: 'CANARY_HERDR_SESSION_DIR_f7f7',
+};
 const ARGV_CANARIES = {
   prompt: 'CANARY_ARGV_PROMPT_a1a1',
   directory: 'CANARY_ARGV_DIR_b2b2',
@@ -40,13 +46,15 @@ const SSH_CANARIES = {
   smuggledHost: 'CANARY_SMUGGLED_HOST_b8b8',
 };
 const ENV_CANARY = 'CANARY_ENV_TOKEN_c9c9';
-const ALL_MARKERS = [...Object.values(CANARIES), ...Object.values(HERDR_CANARIES), ...Object.values(ARGV_CANARIES), ...Object.values(SSH_CANARIES), CONFIG_CANARY, ENV_CANARY];
+const ALL_MARKERS = [...Object.values(CANARIES), ...Object.values(HERDR_CANARIES), ...Object.values(HERDR_SESSION_CANARIES), ...Object.values(ARGV_CANARIES), ...Object.values(SSH_CANARIES), CONFIG_CANARY, ENV_CANARY];
 
 const today = new Date().toISOString().slice(0, 10);
 const root = tempDir();
 const home = join(root, 'home');
 const binDir = join(root, 'bin');
 const herdrPayload = join(root, 'herdr.json');
+const herdrSessionPayload = join(root, 'herdr-session.json');
+const herdrSessions = join(root, 'herdr-sessions.json');
 const processes: ChildProcess[] = [];
 
 function herdrAgent(fields: Record<string, unknown>): Record<string, unknown> {
@@ -108,7 +116,30 @@ before(async () => {
       },
     }),
   );
-  writeScript(binDir, 'herdr', `cat '${herdrPayload}'`);
+  writeFileSync(
+    herdrSessionPayload,
+    JSON.stringify({ id: 'cli:agent:list', result: { type: 'agent_list', agents: [herdrAgent({ pane_id: 'w1:p1', agent: 'pi', agent_status: 'idle' })] } }),
+  );
+  const namedSocket = `/run/${HERDR_SESSION_CANARIES.dir}/${HERDR_SESSION_CANARIES.socket}.sock`;
+  writeFileSync(
+    herdrSessions,
+    JSON.stringify({
+      sessions: [
+        { default: true, name: 'default', running: true, session_dir: `/home/${HERDR_SESSION_CANARIES.dir}`, socket_path: '/run/default.sock' },
+        { default: false, name: HERDR_SESSION_CANARIES.name, running: true, session_dir: `/home/${HERDR_SESSION_CANARIES.dir}`, socket_path: namedSocket },
+      ],
+    }),
+  );
+  writeScript(
+    binDir,
+    'herdr',
+    `if [ "$1 $2" = "session list" ]; then cat '${herdrSessions}'; exit; fi
+case "\${HERDR_SOCKET_PATH:-}" in
+  '${namedSocket}') cat '${herdrSessionPayload}';;
+  '') cat '${herdrPayload}';;
+  *) exit 1;;
+esac`,
+  );
 
   // Real processes that hold markers in their arguments and paths.
   const sleeper = join(root, ARGV_CANARIES.directory);
@@ -133,6 +164,9 @@ test('the planted markers are really in the source data', () => {
   for (const marker of Object.values(CANARIES)) assert.ok(logs.includes(marker), marker);
   const herdr = readFileSync(herdrPayload, 'utf8');
   for (const marker of Object.values(HERDR_CANARIES)) assert.ok(herdr.includes(marker), marker);
+  const sessions = readFileSync(herdrSessions, 'utf8');
+  for (const marker of Object.values(HERDR_SESSION_CANARIES)) assert.ok(sessions.includes(marker), marker);
+  assert.ok(readFileSync(herdrSessionPayload, 'utf8').includes(HERDR_CANARIES.title), 'the named session carries the same sensitive fields');
 });
 
 test('ccusage parsed the fixture, and its raw JSON holds a marker to drop', () => {
@@ -168,7 +202,8 @@ test('the wire carries the numbers and closed-list names, joined by key', () => 
     ['claude', 'working', 'w1:p1'],
     ['dsh-tui', 'blocked', 'w2:p1'],
     ['other', 'unknown', null],
-  ]);
+    ['pi', 'idle', 'w1:p1'],
+  ], 'the named session was read too');
   const claude = herdrRows[0]!;
   const joined = usage.rows.find((row) => row.k === claude.k);
   assert.ok(joined, 'Herdr session id and ccusage session id join through the key');

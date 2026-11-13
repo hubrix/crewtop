@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:f
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { closedAgentName, isCoveredByCcusage } from '../src/agents.ts';
-import { CCUSAGE_CONFIG, CcusageRunner } from '../src/collect/ccusage.ts';
-import { parseHerdrList } from '../src/collect/herdr.ts';
+import { CCUSAGE_CONFIG, CcusageRunner, parseSessionReport } from '../src/collect/ccusage.ts';
+import { herdrSessionId, MAX_HERDR_SESSIONS, parseHerdrList, parseHerdrSessions, readHerdr } from '../src/collect/herdr.ts';
 import { matchProcessName, mergeLive, scanProcesses } from '../src/collect/proc.ts';
 import type { ProcAgent, ProcScan } from '../src/collect/proc.ts';
 import { joinId, loadSalt, makeKeyer, sessionKey } from '../src/collect/salt.ts';
@@ -57,6 +57,183 @@ test('Herdr: every status it documents passes through, and a bad shape is refuse
   assert.equal(parseHerdrList('nope', testKeyer), null);
   assert.equal(parseHerdrList('{"result":{}}', testKeyer), null);
   assert.deepEqual(parseHerdrList('{"result":{"agents":[]}}', testKeyer), []);
+});
+
+// A pi session as Herdr 0.x and ccusage 20.0.48 report it on a real machine: Herdr
+// gives the transcript path, ccusage the UUID after the last `_` of its file name.
+const PI_UUID = '01a1d312-ff8f-7389-9e18-43e0723d6cd2';
+const PI_PATH = `/home/someone/.pi/agent/sessions/--work-project--/2026-11-13T04-03-20-079Z_${PI_UUID}.jsonl`;
+const PI_USAGE = {
+  agent: 'pi',
+  cacheCreationTokens: 0,
+  cacheReadTokens: 27324416,
+  inputTokens: 1852301,
+  metadata: { lastActivity: '2026-11-13T12:26:41.152Z', projectPath: '--work-project--' },
+  modelBreakdowns: [{ cacheCreationTokens: 0, cacheReadTokens: 27324416, cost: 0, inputTokens: 1852301, modelName: '[pi] backup', outputTokens: 187675, storedCost: 0 }],
+  modelsUsed: ['[pi] backup'],
+  outputTokens: 187675,
+  period: PI_UUID,
+  totalCost: 0,
+  totalTokens: 29364392,
+};
+
+test('Herdr: a pi session named by its transcript path joins its ccusage row, at $0', () => {
+  const text = JSON.stringify({
+    result: { agents: [{ agent: 'pi', agent_status: 'working', pane_id: 'w3:p1', agent_session: { agent: 'pi', kind: 'path', source: 'herdr:pi', value: PI_PATH } }] },
+  });
+  const [live] = parseHerdrList(text, testKeyer)!;
+  const [usage] = parseSessionReport(JSON.stringify({ session: [PI_USAGE] }), testKeyer)!;
+  assert.equal(live!.k, usage!.k);
+  assert.equal(live!.k, sessionKey(testKeyer, PI_UUID));
+  assert.equal(usage!.c, 0, 'a local model costs $0, not n/a');
+  assert.equal(usage!.i + usage!.o, 1852301 + 187675);
+});
+
+test('Herdr: only a pi path is reduced to its UUID; ids and other paths pass through', () => {
+  assert.equal(herdrSessionId('pi', { kind: 'path', value: PI_PATH }), PI_UUID);
+  assert.equal(herdrSessionId('pi', { kind: 'path', value: `${PI_UUID}.jsonl` }), PI_UUID);
+  assert.equal(herdrSessionId('claude', { kind: 'id', value: 'b73fdb02-e79e-4c53-88f7-f2e798f2f68a' }), 'b73fdb02-e79e-4c53-88f7-f2e798f2f68a');
+  assert.equal(herdrSessionId('pi', { kind: 'id', value: 'sess-1' }), 'sess-1');
+  assert.equal(herdrSessionId('codex', { kind: 'path', value: '/x/y.jsonl' }), '/x/y.jsonl');
+  assert.equal(herdrSessionId('pi', { kind: 'path', value: '/x/ends-in-underscore_.jsonl' }), undefined);
+  assert.equal(herdrSessionId('pi', { kind: 'path', value: '' }), undefined);
+  assert.equal(herdrSessionId('pi', null), undefined);
+});
+
+// Herdr sessions
+
+const sessionEntry = (name: string, socket: string, extra: Record<string, unknown> = {}) => ({ name, socket_path: socket, session_dir: `/SECRET/${name}`, running: true, default: false, ...extra });
+
+test('Herdr sessions: running sessions a plain call misses are picked, anything else is not', () => {
+  const text = JSON.stringify({
+    sessions: [
+      sessionEntry('default', '/h/herdr.sock', { default: true }),
+      sessionEntry('fm-remote', '/h/sessions/fm-remote/herdr.sock'),
+      sessionEntry('stopped', '/h/sessions/stopped/herdr.sock', { running: false }),
+      { name: 'no-socket', running: true },
+      { name: '', socket_path: '/h/empty-name.sock', running: true },
+      null,
+      'SECRET',
+    ],
+  });
+  assert.deepEqual(parseHerdrSessions(text), [{ name: 'fm-remote', socket: '/h/sessions/fm-remote/herdr.sock' }], 'without an inherited socket a plain call reads the default');
+  assert.deepEqual(
+    parseHerdrSessions(text, '/h/sessions/fm-remote/herdr.sock').map((s) => s.name),
+    ['default'],
+    'inside a named session a plain call reads that session, so the default is the other one',
+  );
+  assert.deepEqual(parseHerdrSessions('SECRET'), []);
+  assert.deepEqual(parseHerdrSessions('{"sessions":{}}'), []);
+  assert.deepEqual(parseHerdrSessions('{"result":{"agents":[]}}'), [], 'a Herdr without session list --json reads as no extra sessions');
+  const many = JSON.stringify({ sessions: Array.from({ length: MAX_HERDR_SESSIONS + 5 }, (_, i) => sessionEntry(`s${i}`, `/h/s${i}.sock`)) });
+  assert.equal(parseHerdrSessions(many).length, MAX_HERDR_SESSIONS);
+});
+
+test('Herdr: a pane id keys apart per session, a session id keys the same everywhere', () => {
+  const text = JSON.stringify({ result: { agents: [{ agent: 'pi', agent_status: 'idle', pane_id: 'w1:p1' }, { agent: 'claude', agent_status: 'idle', pane_id: 'w1:p2', agent_session: { value: 'sess-9' } }] } });
+  const plain = parseHerdrList(text, testKeyer)!;
+  const scoped = parseHerdrList(text, testKeyer, 'fm-remote')!;
+  const other = parseHerdrList(text, testKeyer, 'lab')!;
+  assert.equal(plain[0]!.k, testKeyer('pane:w1:p1'), 'the default read keys as before');
+  assert.notEqual(scoped[0]!.k, plain[0]!.k);
+  assert.notEqual(scoped[0]!.k, other[0]!.k);
+  assert.equal(scoped[0]!.seat, 'w1:p1');
+  assert.equal(scoped[1]!.k, plain[1]!.k);
+  assert.equal(scoped[1]!.k, sessionKey(testKeyer, 'sess-9'));
+});
+
+const agentList = (agents: Record<string, unknown>[]) => JSON.stringify({ result: { agents: agents.map((a) => ({ terminal_title: 'SECRET', cwd: '/SECRET', ...a })) } });
+
+/** A fake herdr that answers `session list --json` and `agent list` per HERDR_SOCKET_PATH. */
+function fakeHerdr(sessions: unknown, bySocket: Record<string, string | null>, plain: string | null): string {
+  const dir = freshDir();
+  mkdirSync(dir, { recursive: true });
+  const files: string[] = [];
+  const answer = (text: string | null) => {
+    if (text === null) return 'echo SECRET >&2; exit 1';
+    const file = join(dir, `answer-${files.length}.json`);
+    files.push(file);
+    writeFileSync(file, text);
+    return `cat '${file}'`;
+  };
+  const sessionsAnswer = sessions === null ? 'echo "unknown subcommand" >&2; exit 2' : answer(JSON.stringify(sessions));
+  const cases = Object.entries(bySocket)
+    .map(([socket, text]) => `    '${socket}') ${answer(text)};;`)
+    .join('\n');
+  return writeScript(
+    dir,
+    'herdr',
+    `if [ "$1 $2" = "session list" ]; then ${sessionsAnswer}; exit; fi
+if [ -z "\${HERDR_SOCKET_PATH:-}" ]; then ${answer(plain)}; exit; fi
+case "$HERDR_SOCKET_PATH" in
+${cases}
+    *) exit 1;;
+esac`,
+  );
+}
+
+const DEFAULT_AGENTS = agentList([
+  { agent: 'claude', agent_status: 'working', pane_id: 'w1:p1', agent_session: { value: 'sess-shared' } },
+  { agent: 'pi', agent_status: 'idle', pane_id: 'w2:p1' },
+]);
+const REMOTE_AGENTS = agentList([
+  { agent: 'codex', agent_status: 'blocked', pane_id: 'w1:p1', agent_session: { value: 'sess-remote' } },
+  { agent: 'pi', agent_status: 'done', pane_id: 'w2:p1' },
+  { agent: 'claude', agent_status: 'working', pane_id: 'w9:p9', agent_session: { value: 'sess-shared' } },
+]);
+const LISTING = {
+  sessions: [
+    sessionEntry('default', '/h/herdr.sock', { default: true }),
+    sessionEntry('fm-remote', '/h/sessions/fm-remote/herdr.sock'),
+    sessionEntry('dead', '/h/sessions/dead/herdr.sock'),
+    sessionEntry('gone', '/h/sessions/gone/herdr.sock', { running: false }),
+  ],
+};
+
+test('Herdr read: agents across the default and a named session, a dead socket skipped, each agent once', async () => {
+  const bin = fakeHerdr(LISTING, { '/h/sessions/fm-remote/herdr.sock': REMOTE_AGENTS, '/h/sessions/dead/herdr.sock': null, '/h/sessions/gone/herdr.sock': 'SECRET-SHOULD-NOT-BE-READ' }, DEFAULT_AGENTS);
+  const rows = (await readHerdr(testKeyer, bin, { PATH: process.env.PATH }))!;
+  assert.deepEqual(
+    rows.map((r) => [r.a, r.st, r.src, r.seat]),
+    [
+      ['claude', 'working', 'herdr', 'w1:p1'],
+      ['pi', 'idle', 'herdr', 'w2:p1'],
+      ['codex', 'blocked', 'herdr', 'w1:p1'],
+      ['pi', 'done', 'herdr', 'w2:p1'],
+    ],
+    'the shared session id counts once and the same pane id in two sessions stays two agents',
+  );
+  assert.equal(new Set(rows.map((r) => r.k)).size, rows.length);
+  assert.equal(rows[2]!.k, sessionKey(testKeyer, 'sess-remote'));
+  assert.doesNotMatch(JSON.stringify(rows), /SECRET|fm-remote|\/h\//);
+});
+
+test('Herdr read: one session answering is enough, and none answering is unavailable', async () => {
+  const remoteOnly = fakeHerdr(LISTING, { '/h/sessions/fm-remote/herdr.sock': REMOTE_AGENTS }, null);
+  assert.deepEqual((await readHerdr(testKeyer, remoteOnly, { PATH: process.env.PATH }))!.map((r) => r.a), ['codex', 'pi', 'claude']);
+  const garbled = fakeHerdr(LISTING, { '/h/sessions/fm-remote/herdr.sock': 'SECRET not json' }, DEFAULT_AGENTS);
+  assert.deepEqual((await readHerdr(testKeyer, garbled, { PATH: process.env.PATH }))!.map((r) => r.a), ['claude', 'pi'], 'a bad answer from one session leaves the others');
+  const none = fakeHerdr(LISTING, {}, null);
+  assert.equal(await readHerdr(testKeyer, none, { PATH: process.env.PATH }), null);
+});
+
+test('Herdr read: a Herdr without session listing reads the default alone, as before', async () => {
+  const old = fakeHerdr(null, { '/h/sessions/fm-remote/herdr.sock': REMOTE_AGENTS }, DEFAULT_AGENTS);
+  const rows = (await readHerdr(testKeyer, old, { PATH: process.env.PATH }))!;
+  assert.deepEqual(rows, parseHerdrList(DEFAULT_AGENTS, testKeyer));
+});
+
+test('Herdr read: inside a named session the default is read by socket and the inherited one is not read twice', async () => {
+  const listing = { sessions: [sessionEntry('default', '/h/herdr.sock', { default: true }), sessionEntry('fm-remote', '/h/sessions/fm-remote/herdr.sock')] };
+  // A plain call inherits the fm-remote socket, so it answers with fm-remote's agents.
+  const bin = fakeHerdr(listing, { '/h/herdr.sock': DEFAULT_AGENTS, '/h/sessions/fm-remote/herdr.sock': REMOTE_AGENTS }, null);
+  const rows = (await readHerdr(testKeyer, bin, { PATH: process.env.PATH, HERDR_SOCKET_PATH: '/h/sessions/fm-remote/herdr.sock' }))!;
+  assert.deepEqual(rows.map((r) => [r.a, r.st]), [
+    ['codex', 'blocked'],
+    ['pi', 'done'],
+    ['claude', 'working'],
+    ['pi', 'idle'],
+  ]);
 });
 
 // Process table
@@ -289,6 +466,22 @@ test('stream: Herdr failing is reported, and the process net still runs', async 
   const live = frames.find((f) => f.t === 'live') as LiveFrame;
   assert.deepEqual(live.agents.map((a) => [a.a, a.st, a.src]), [['claude', 'unknown', 'proc']]);
   assert.doesNotMatch(raw, /SECRET/);
+});
+
+test('stream: an agent in a named Herdr session shows its real state, not a process-table unknown', async () => {
+  const procRoot = freshDir();
+  mkdirSync(procRoot);
+  writeFileSync(join(procRoot, 'uptime'), '100.00 1.00\n');
+  writeProc(procRoot, 5, 1, 'codex', ['codex', 'SECRET']);
+  const bin = fakeHerdr(LISTING, { '/h/herdr.sock': DEFAULT_AGENTS, '/h/sessions/fm-remote/herdr.sock': REMOTE_AGENTS }, DEFAULT_AGENTS);
+  const { frames, raw } = await runCollector({ ccusage: `echo '{"session":[]}'`, herdr: `exec '${bin}' "$@"`, procRoot }, (f) => count(f, 'live') >= 2);
+  const live = frames.find((f) => f.t === 'live') as LiveFrame;
+  const codex = live.agents.filter((a) => a.a === 'codex');
+  assert.deepEqual(codex.map((a) => [a.st, a.src]), [['blocked', 'herdr']]);
+  assert.equal(typeof codex[0]!.up, 'number', 'the lone codex process lends its uptime to the Herdr row');
+  assert.equal(live.agents.filter((a) => a.src === 'herdr').length, 4);
+  assert.ok(!frames.some((f) => f.t === 'err' && f.code === 'herdr_unavailable'), 'every session answered or was skipped quietly');
+  assert.doesNotMatch(raw, /SECRET|fm-remote|\/h\//);
 });
 
 test('stream: frames refresh on their own cadence', async () => {
